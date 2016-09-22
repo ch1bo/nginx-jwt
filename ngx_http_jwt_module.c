@@ -23,13 +23,6 @@ typedef struct {
 
 // Function forward declaration
 
-static ngx_int_t ngx_http_auth_request_handler(ngx_http_request_t *r);
-static ngx_int_t ngx_http_auth_request_done(ngx_http_request_t *r,
-                                            void *data,
-                                            ngx_int_t rc);
-static ngx_int_t ngx_http_auth_request_set_variables(ngx_http_request_t *r,
-                                                     ngx_http_jwt_loc_conf_t *conf,
-                                                     ngx_http_jwt_ctx_t *ctx);
 static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf,
                                          void *parent,
@@ -38,6 +31,10 @@ static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf);
 static char *ngx_http_jwt_request(ngx_conf_t *cf,
                                   ngx_command_t *cmd,
                                   void *conf);
+static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_jwt_request_done(ngx_http_request_t *r,
+                                           void *data,
+                                           ngx_int_t rc);
 
 // Directives
 static ngx_command_t ngx_http_jwt_commands[] = {
@@ -115,6 +112,8 @@ static char * ngx_http_jwt_request(ngx_conf_t *cf, ngx_command_t *cmd, void *hin
   ngx_http_jwt_loc_conf_t *conf = hint;
   ngx_str_t *value;
 
+  ngx_conf_log_error(NGX_LOG_ERR, cf, 0, "jwt_request directive");
+
   if (conf->uri.data != NULL) {
     return "is duplicate";
   }
@@ -135,52 +134,63 @@ static char * ngx_http_jwt_request(ngx_conf_t *cf, ngx_command_t *cmd, void *hin
 
 // Post configuration - add request handler
 static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
-  ngx_http_handler_pt *h;
-  ngx_http_core_main_conf_t *cmcf;
+  ngx_http_core_main_conf_t *cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
-  cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
-
-  h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+  ngx_http_handler_pt *h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
   if (h == NULL) {
     return NGX_ERROR;
   }
-
-  *h = ngx_http_auth_request_handler;
+  *h = ngx_http_jwt_request_handler;
 
   return NGX_OK;
 }
 
-static ngx_int_t ngx_http_auth_request_handler(ngx_http_request_t *r) {
-  ngx_table_elt_t               *h, *ho;
-  ngx_http_request_t            *sr;
-  ngx_http_post_subrequest_t    *ps;
-  ngx_http_jwt_ctx_t   *ctx;
-  ngx_http_jwt_loc_conf_t *conf;
+static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_handler");
 
-  conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
 
   if (conf->uri.len == 0) {
     return NGX_DECLINED;
   }
 
-  ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                 "auth request handler");
-
-  ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
-
-  if (ctx != NULL) {
-    if (!ctx->done) {
-      return NGX_AGAIN;
-    }
-
-    /*
-     * as soon as we are done - explicitly set variables to make
-     * sure they will be available after internal redirects
-     */
-
-    if (ngx_http_auth_request_set_variables(r, conf, ctx) != NGX_OK) {
+  ngx_http_jwt_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
+  if (ctx == NULL) {
+    ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_jwt_ctx_t));
+    if (ctx == NULL) {
       return NGX_ERROR;
     }
+
+    // TODO(SN): let this proxy instead of a new subrequest
+    ngx_http_post_subrequest_t *ps = ngx_palloc(r->pool, sizeof(ngx_http_post_subrequest_t));
+    if (ps == NULL) {
+      return NGX_ERROR;
+    }
+    ps->handler = ngx_http_jwt_request_done;
+    ps->data = ctx;
+
+    ngx_http_request_t *sr;
+    if (ngx_http_subrequest(r, &conf->uri, NULL, &sr, ps, NGX_HTTP_SUBREQUEST_WAITED) != NGX_OK) {
+      return NGX_ERROR;
+    }
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "jwt_handler subrequest: %s", conf-uri);
+
+    /*
+     * allocate fake request body to avoid attempts to read it and to make
+     * sure real body file (if already read) won't be closed by upstream
+     */
+    sr->request_body = ngx_pcalloc(r->pool, sizeof(ngx_http_request_body_t));
+    if (sr->request_body == NULL) {
+      return NGX_ERROR;
+    }
+    sr->header_only = 1;
+
+    ctx->subrequest = sr;
+    ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
+  } else if (ctx->done) { // Subrequest finished
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                   "jwt_handler subrequest done:%ui", ctx->status);
 
     /* return appropriate status */
 
@@ -189,16 +199,15 @@ static ngx_int_t ngx_http_auth_request_handler(ngx_http_request_t *r) {
     }
 
     if (ctx->status == NGX_HTTP_UNAUTHORIZED) {
-      sr = ctx->subrequest;
+      ngx_http_request_t *sr = ctx->subrequest;
 
-      h = sr->headers_out.www_authenticate;
-
+      ngx_table_elt_t *h = sr->headers_out.www_authenticate;
       if (!h && sr->upstream) {
         h = sr->upstream->headers_in.www_authenticate;
       }
 
       if (h) {
-        ho = ngx_list_push(&r->headers_out.headers);
+        ngx_table_elt_t *ho = ngx_list_push(&r->headers_out.headers);
         if (ho == NULL) {
           return NGX_ERROR;
         }
@@ -222,113 +231,17 @@ static ngx_int_t ngx_http_auth_request_handler(ngx_http_request_t *r) {
 
     return NGX_HTTP_INTERNAL_SERVER_ERROR;
   }
-
-  ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_jwt_ctx_t));
-  if (ctx == NULL) {
-    return NGX_ERROR;
-  }
-
-  ps = ngx_palloc(r->pool, sizeof(ngx_http_post_subrequest_t));
-  if (ps == NULL) {
-    return NGX_ERROR;
-  }
-
-  ps->handler = ngx_http_auth_request_done;
-  ps->data = ctx;
-
-  if (ngx_http_subrequest(r, &conf->uri, NULL, &sr, ps,
-                          NGX_HTTP_SUBREQUEST_WAITED)
-      != NGX_OK)
-    {
-      return NGX_ERROR;
-    }
-
-  /*
-   * allocate fake request body to avoid attempts to read it and to make
-   * sure real body file (if already read) won't be closed by upstream
-   */
-
-  sr->request_body = ngx_pcalloc(r->pool, sizeof(ngx_http_request_body_t));
-  if (sr->request_body == NULL) {
-    return NGX_ERROR;
-  }
-
-  sr->header_only = 1;
-
-  ctx->subrequest = sr;
-
-  ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
-
   return NGX_AGAIN;
 }
 
 
-static ngx_int_t ngx_http_auth_request_done(ngx_http_request_t *r, void *data, ngx_int_t rc) {
-  ngx_http_jwt_ctx_t   *ctx = data;
+static ngx_int_t ngx_http_jwt_request_done(ngx_http_request_t *r, void *data, ngx_int_t rc) {
+  ngx_http_jwt_ctx_t *ctx = data;
 
   ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                 "auth request done s:%ui", r->headers_out.status);
+                 "jwt_request_done: %ui", r->headers_out.status);
 
   ctx->done = 1;
   ctx->status = r->headers_out.status;
-
   return rc;
 }
-
-
-static ngx_int_t ngx_http_auth_request_set_variables(ngx_http_request_t *r,
-                                                     ngx_http_jwt_loc_conf_t *conf,
-                                                     ngx_http_jwt_ctx_t *ctx) {
-  ngx_str_t                          val;
-  ngx_http_variable_t               *v;
-  ngx_http_variable_value_t         *vv;
-  ngx_http_auth_request_variable_t  *av, *last;
-  ngx_http_core_main_conf_t         *cmcf;
-
-  ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                 "auth request set variables");
-
-  if (conf->vars == NULL) {
-    return NGX_OK;
-  }
-
-  cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
-  v = cmcf->variables.elts;
-
-  av = conf->vars->elts;
-  last = av + conf->vars->nelts;
-
-  while (av < last) {
-    /*
-     * explicitly set new value to make sure it will be available after
-     * internal redirects
-     */
-
-    vv = &r->variables[av->index];
-
-    if (ngx_http_complex_value(ctx->subrequest, &av->value, &val)
-        != NGX_OK)
-      {
-        return NGX_ERROR;
-      }
-
-    vv->valid = 1;
-    vv->not_found = 0;
-    vv->data = val.data;
-    vv->len = val.len;
-
-    if (av->set_handler) {
-      /*
-       * set_handler only available in cmcf->variables_keys, so we store
-       * it explicitly
-       */
-
-      av->set_handler(r, vv, v[av->index].data);
-    }
-
-    av++;
-  }
-
-  return NGX_OK;
-}
-

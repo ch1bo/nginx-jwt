@@ -12,7 +12,8 @@ RUN apt-get update && \
             make \
     && rm -rf /var/lib/apt/lists/*
 # Add module source
-COPY . /usr/src/nginx/nginx-jwt
+COPY config  /usr/src/nginx/nginx-jwt/
+COPY ngx_http_jwt_module.c  /usr/src/nginx/nginx-jwt/
 # Build with nginx from source
 WORKDIR /usr/src/nginx/nginx-1.11.4
 RUN ./configure \
