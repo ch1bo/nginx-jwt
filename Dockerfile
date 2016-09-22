@@ -11,14 +11,17 @@ RUN apt-get update && \
             libz-dev \
             make \
     && rm -rf /var/lib/apt/lists/*
+# Add module source
+COPY . /usr/src/nginx/nginx-jwt
+# Build with nginx from source
 WORKDIR /usr/src/nginx/nginx-1.11.4
-# Build nginx from source
 RUN ./configure \
     --prefix="/usr" \
     --conf-path="/etc/nginx/nginx.conf" \
     --pid-path="/var/run/nginx.pid" \
     --error-log-path="/var/log/nginx/error.log" \
-    --http-log-path="/var/log/nginx/access.log"
+    --http-log-path="/var/log/nginx/access.log" \
+    --add-module=../nginx-jwt
 RUN make && make install
 RUN useradd nginx
 WORKDIR /
@@ -28,4 +31,4 @@ RUN ln -sf /dev/stdout /var/log/nginx/access.log \
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 # Custom nginx configuration
-copy nginx.conf /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf
