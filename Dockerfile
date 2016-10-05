@@ -22,14 +22,12 @@ RUN ./configure \
     --pid-path="/var/run/nginx.pid" \
     --error-log-path="/var/log/nginx/error.log" \
     --http-log-path="/var/log/nginx/access.log" \
+    --with-debug \
     --add-module=../nginx-jwt
 RUN make && make install
 RUN useradd nginx
 WORKDIR /
-# forward request and error logs to docker log collector
-RUN ln -sf /dev/stdout /var/log/nginx/access.log \
-	&& ln -sf /dev/stderr /var/log/nginx/error.log
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["nginx"]
 # Custom nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
