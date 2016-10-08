@@ -1,8 +1,9 @@
+#include <stdbool.h>
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <jwt.h>
 
-#include <stdbool.h>
 
 // Module structures
 
@@ -125,9 +126,29 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
 
   for (ngx_chain_t *cl = in; cl; cl = cl->next) {
     size_t len = cl->buf->last - cl->buf->pos;
-    char *body = ngx_pcalloc(r->pool, len);
-    memcpy(body, cl->buf->pos, len);
-    ngx_log_stderr(0, "%s", body);
+    if (len > 0) {
+      char *body = ngx_pcalloc(r->pool, len);
+      memcpy(body, cl->buf->pos, len);
+      ngx_log_stderr(0, "buf: %s", body);
+      jwt_t* token;
+      if (jwt_new(&token) < 0) {
+        // TODO(SN): print errno
+        return ngx_http_next_body_filter(r, in);
+      }
+      // TODO(SN): load key material from directive argument (file)
+      char *key = "secretsecretsecretsecretsecret??";
+      if (jwt_set_alg(token, JWT_ALG_HS256, (unsigned char *)key, 32) < 0) {
+        // TODO(SN): print errno
+        return ngx_http_next_body_filter(r, in);
+      }
+      if (jwt_add_grants_json(token, body) < 0) {
+        // TODO(SN): print errno
+        return ngx_http_next_body_filter(r, in);
+      }
+      char *d = jwt_encode_str(token);
+      ngx_log_stderr(0, "token: %s\n", d);
+      free(d);
+    }
   }
 
   return ngx_http_next_body_filter(r, in);
