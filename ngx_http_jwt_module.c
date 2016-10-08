@@ -2,10 +2,13 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include <stdbool.h>
+
 // Module structures
 
 typedef struct {
   ngx_str_t uri;
+  ngx_flag_t jwt_issue;
 } ngx_http_jwt_loc_conf_t;
 
 typedef struct {
@@ -19,6 +22,7 @@ typedef struct {
   ngx_http_complex_value_t  value;
   ngx_http_set_variable_pt  set_handler;
 } ngx_http_auth_request_variable_t;
+
 
 // Function forward declaration
 
@@ -35,6 +39,8 @@ static char *ngx_http_jwt_request(ngx_conf_t *cf,
 static char *ngx_http_jwt_issue(ngx_conf_t *cf,
                                 ngx_command_t *cmd,
                                 void *conf);
+static ngx_int_t ngx_http_jwt_issue_filter(ngx_http_request_t *request,
+                                           ngx_chain_t *chain);
 
 // Directives
 static ngx_command_t ngx_http_jwt_commands[] = {
@@ -53,7 +59,8 @@ static ngx_command_t ngx_http_jwt_commands[] = {
   ngx_null_command
 };
 
-// Context creation functions
+// Module definition
+
 static ngx_http_module_t ngx_http_jwt_module_ctx = {
   NULL,                                  /* preconfiguration */
   ngx_http_jwt_init,                     /* postconfiguration */
@@ -68,7 +75,6 @@ static ngx_http_module_t ngx_http_jwt_module_ctx = {
   ngx_http_jwt_merge_loc_conf            /* merge location configuration */
 };
 
-// Module description
 ngx_module_t  ngx_http_jwt_module = {
   NGX_MODULE_V1,
   &ngx_http_jwt_module_ctx,              /* module context */
@@ -84,6 +90,8 @@ ngx_module_t  ngx_http_jwt_module = {
   NGX_MODULE_V1_PADDING
 };
 
+static ngx_http_request_body_filter_pt ngx_http_next_request_body_filter;
+
 // Function implementation
 
 // Create location configuration
@@ -95,9 +103,6 @@ static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
     return NULL;
   }
 
-  // set by ngx_pcalloc():
-  // conf->uri = { 0, NULL };
-
   return conf;
 }
 
@@ -107,21 +112,9 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
   ngx_http_jwt_loc_conf_t *conf = child;
 
   ngx_conf_merge_str_value(conf->uri, prev->uri, "");
+  ngx_conf_merge_value(conf->jwt_issue, prev->jwt_issue, false);
 
   return NGX_CONF_OK;
-}
-
-// Post configuration - add request handler
-static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
-  // ngx_http_core_main_conf_t *cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
-
-  // ngx_http_handler_pt *h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
-  // if (h == NULL) {
-  //   return NGX_ERROR;
-  // }
-  // *h = ngx_http_jwt_request_handler;
-
-  return NGX_OK;
 }
 
 // jwt_request directive
@@ -149,5 +142,40 @@ static char * ngx_http_jwt_request(ngx_conf_t *cf, ngx_command_t *cmd, void *hin
 
 // jwt_issue directive
 static char * ngx_http_jwt_issue(ngx_conf_t *cf, ngx_command_t *cmd, void *hint) {
+  ngx_http_jwt_loc_conf_t *conf = hint;
+  conf->jwt_issue = true;
   return NGX_CONF_OK;
+}
+
+static ngx_int_t ngx_http_jwt_issue_filter(ngx_http_request_t *r, ngx_chain_t *in) {
+  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  if (!conf->jwt_issue) {
+    return ngx_http_next_request_body_filter(r, in);
+  }
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_filter enabled");
+  for (ngx_chain_t *cl = in; cl; cl = cl->next) {
+    size_t len = cl->buf->last - cl->buf->pos;
+    char body[len];
+    memcpy(body, cl->buf->pos, len);
+    ngx_log_stderr(0, "%s\n", body);
+  }
+
+  return ngx_http_next_request_body_filter(r, in);
+}
+
+// Post configuration - add request handler
+static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
+  // ngx_http_core_main_conf_t *cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+
+  // ngx_http_handler_pt *h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+  // if (h == NULL) {
+  //   return NGX_ERROR;
+  // }
+  // *h = ngx_http_jwt_request_handler;
+
+  // Install jwt_issue_filter
+  ngx_http_next_request_body_filter = ngx_http_top_request_body_filter;
+  ngx_http_top_request_body_filter = ngx_http_jwt_issue_filter;
+
+  return NGX_OK;
 }
