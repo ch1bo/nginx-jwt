@@ -2,7 +2,8 @@ build:
 	$(MAKE) -C nginx
 
 start: build
-	./nginx/objs/nginx -c nginx.conf
+	mkdir -p tmp
+	cd tmp && ../nginx/objs/nginx -c ../nginx.conf
 
 # image:
 # 	docker build -t nginx-jwt .
