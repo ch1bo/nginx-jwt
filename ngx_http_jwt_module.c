@@ -4,11 +4,11 @@
 #include <ngx_http.h>
 #include <jwt.h>
 
-
 // Module structures
 
 typedef struct {
-  ngx_flag_t jwt_issue;
+  ngx_flag_t issue;
+  jwt_alg_t algorithm;
 } ngx_http_jwt_loc_conf_t;
 
 typedef struct {
@@ -32,10 +32,10 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *request,
 // Directives
 static ngx_command_t ngx_http_jwt_commands[] = {
   { ngx_string("jwt_issue"),
-    NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
+    NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
     ngx_http_jwt_issue,
     NGX_HTTP_LOC_CONF_OFFSET,
-    0,
+    offsetof(ngx_http_jwt_loc_conf_t, issue),
     NULL },
   ngx_null_command
 };
@@ -84,6 +84,7 @@ static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
   if (conf == NULL) {
     return NULL;
   }
+  conf->issue = NGX_CONF_UNSET;
 
   return conf;
 }
@@ -93,21 +94,19 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
   ngx_http_jwt_loc_conf_t *prev = parent;
   ngx_http_jwt_loc_conf_t *conf = child;
 
-  ngx_conf_merge_value(conf->jwt_issue, prev->jwt_issue, false);
+  ngx_conf_merge_value(conf->issue, prev->issue, false);
 
   return NGX_CONF_OK;
 }
 
 // jwt_issue directive
 static char * ngx_http_jwt_issue(ngx_conf_t *cf, ngx_command_t *cmd, void *hint) {
-  ngx_http_jwt_loc_conf_t *conf = hint;
-  conf->jwt_issue = true;
-  return NGX_CONF_OK;
+  return ngx_conf_set_flag_slot(cf, cmd, hint);
 }
 
 static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
   ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
-  if (!conf->jwt_issue) {
+  if (!conf->issue) {
     return ngx_http_next_header_filter(r);
   }
 
@@ -118,7 +117,7 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 
 static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
   ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
-  if (!conf->jwt_issue) {
+  if (!conf->issue) {
     return ngx_http_next_body_filter(r, in);
   }
 
@@ -127,27 +126,46 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   for (ngx_chain_t *cl = in; cl; cl = cl->next) {
     size_t len = cl->buf->last - cl->buf->pos;
     if (len > 0) {
+      // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
       char *body = ngx_pcalloc(r->pool, len);
       memcpy(body, cl->buf->pos, len);
       ngx_log_stderr(0, "buf: %s", body);
+      // TODO(SN): concatenate buffers before creating token?
       jwt_t* token;
       if (jwt_new(&token) < 0) {
-        // TODO(SN): print errno
-        return ngx_http_next_body_filter(r, in);
+        // TODO(SN): log error
+        return NGX_ERROR;
       }
+      // TODO(SN): allow to switch JWT algorithm via directive / argument
       // TODO(SN): load key material from directive argument (file)
       char *key = "secretsecretsecretsecretsecret??";
       if (jwt_set_alg(token, JWT_ALG_HS256, (unsigned char *)key, 32) < 0) {
-        // TODO(SN): print errno
+        // TODO(SN): log error
         return ngx_http_next_body_filter(r, in);
       }
       if (jwt_add_grants_json(token, body) < 0) {
-        // TODO(SN): print errno
+        // TODO(SN): log error
         return ngx_http_next_body_filter(r, in);
       }
+      // Write token to a single buffer
       char *d = jwt_encode_str(token);
-      ngx_log_stderr(0, "token: %s\n", d);
-      free(d);
+      size_t dlen = strlen(d);
+      ngx_log_stderr(0, "token: (%d) %s", dlen, d);
+      ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
+      if (out == NULL) {
+        return NGX_ERROR;
+      }
+      ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+      if (buf == NULL) {
+        return NGX_ERROR;
+      }
+      buf->pos = buf->start = (unsigned char *)d;
+      buf->last = buf->end = (unsigned char *)d + dlen;
+      buf->memory = true;
+      buf->last_buf = true;
+      out->buf = buf;
+      out->next = NULL;
+      return ngx_http_next_body_filter(r, out);
     }
   }
 
