@@ -1,3 +1,4 @@
+build/
 nginx/
 *_temp/
 access.log

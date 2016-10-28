@@ -1,9 +1,10 @@
+.PHONY: build
 build: nginx/Makefile
 	$(MAKE) -C nginx
 
 start: build
 	mkdir -p tmp
-	cd tmp && ../nginx/objs/nginx -c ../nginx.conf
+	cd tmp && LD_LIBRARY_PATH=../build/libjwt/lib ../nginx/objs/nginx -c ../nginx.conf
 
 image:
 	docker build -t nginx-jwt .
@@ -23,5 +24,5 @@ clean:
 	$(MAKE) -C nginx clean
 	rm -rf tmp
 
-distclean:
+distclean: clean
 	rm -rf nginx

@@ -2,7 +2,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <jwt/jwt.h>
+#include <jwt.h>
 
 // Module structures
 
