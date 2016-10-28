@@ -1,0 +1,6 @@
+[submodule "libjwt"]
+	path = libjwt
+	url = git@github.com:benmcollins/libjwt.git
+[submodule "jansson"]
+	path = jansson
+	url = git@github.com:akheron/jansson.git

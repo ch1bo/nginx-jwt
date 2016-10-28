@@ -1,18 +1,27 @@
-build:
+build: nginx/Makefile
 	$(MAKE) -C nginx
 
 start: build
 	mkdir -p tmp
 	cd tmp && ../nginx/objs/nginx -c ../nginx.conf
 
-# image:
-# 	docker build -t nginx-jwt .
-#
-# start: image
-# 	docker run --rm \
-# 		--name nginx-jwt \
-# 		-p 80:80 \
-# 		nginx-jwt
-#
-# stop:
-# 	docker stop nginx-jwt && docker rm nginx-jwt
+image:
+	docker build -t nginx-jwt .
+
+nginx/Makefile: nginx
+	cd nginx && ./configure --prefix="." \
+		--conf-path="nginx.conf" \
+		--error-log-path="error.log" \
+		--http-log-path="access.log" \
+		--add-module=..
+
+nginx:
+	mkdir -p nginx
+	curl http://nginx.org/download/nginx-1.11.5.tar.gz | tar -C nginx -xz --strip-components=1
+
+clean:
+	$(MAKE) -C nginx clean
+	rm -rf tmp
+
+distclean:
+	rm -rf nginx
