@@ -10,7 +10,9 @@ image:
 	docker build -t nginx-jwt .
 
 nginx/Makefile: nginx
-	cd nginx && ./configure --prefix="." \
+	cd nginx; \
+	LIBJWT_INC=$(shell pwd)/libjwt/include LIBJWT_LIB=$(shell pwd)/build/libjwt/lib \
+	./configure --prefix="." \
 		--conf-path="nginx.conf" \
 		--error-log-path="error.log" \
 		--http-log-path="access.log" \

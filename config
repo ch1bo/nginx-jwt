@@ -1,6 +1,6 @@
 ngx_feature_name=
 if [ -n "$LIBJWT_INC" -o -n "$LIBJWT_LIB" ]; then
-	ngx_feature="LibJWT library in directories specified by LIBJWT_INC ($LIBJWT_INC) and/or LIBJWT_LIB ($LIBBJWT_LIB)"
+	ngx_feature="LibJWT library in directories specified by LIBJWT_INC ($LIBJWT_INC) and/or LIBJWT_LIB ($LIBJWT_LIB)"
 	ngx_feature_path="$LIBJWT_INC"
 	if [ $NGX_RPATH = YES ]; then
 		ngx_feature_libs="-R$LIBJWT_LIB -L$LIBJWT_LIB -ljwt"
