@@ -142,9 +142,10 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
   if (!conf->issue) {
     return ngx_http_next_header_filter(r);
   }
-
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_header_filter");
-
+  // chunked encoding and connection close
+  ngx_http_clear_content_length(r);
+  r->keepalive = false;
   return ngx_http_next_header_filter(r);
 }
 
@@ -156,12 +157,14 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
 
   for (ngx_chain_t *cl = in; cl; cl = cl->next) {
-    size_t len = cl->buf->last - cl->buf->pos;
+    size_t len = ngx_buf_size(cl->buf);
     if (len > 0) {
       // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
-      char *body = ngx_pcalloc(r->pool, len);
+      // instead of null terminated string
+      char *body = ngx_pcalloc(r->pool, len+1);
+      bzero(body, len+1);
       memcpy(body, cl->buf->pos, len);
-      ngx_log_stderr(0, "buf: %s", body);
+      ngx_log_stderr(0, "buf: (%d) %s", len, body);
       // TODO(SN): concatenate buffers before creating token?
       jwt_t* token;
       if (jwt_new(&token) < 0) {
