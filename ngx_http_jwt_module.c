@@ -10,6 +10,7 @@ typedef struct {
   ngx_str_t key;
   ngx_flag_t issue;
   ngx_uint_t issue_algorithm;
+  ngx_flag_t verify;
 } ngx_http_jwt_loc_conf_t;
 
 typedef struct {
@@ -22,9 +23,9 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf,
                                          void *parent,
                                          void *child);
 static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf);
-static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *request);
-static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *request,
-                                                ngx_chain_t *chain);
+static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r);
+static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in);
+static ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r);
 
 static ngx_conf_enum_t ngx_http_jwt_algorithms[] = {
   { ngx_string("none"), JWT_ALG_NONE },
@@ -60,6 +61,12 @@ static ngx_command_t ngx_http_jwt_commands[] = {
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof(ngx_http_jwt_loc_conf_t, issue_algorithm),
     &ngx_http_jwt_algorithms },
+  { ngx_string("jwt_verify"),
+    NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
+    ngx_conf_set_flag_slot,
+    NGX_HTTP_LOC_CONF_OFFSET,
+    offsetof(ngx_http_jwt_loc_conf_t, verify),
+    NULL },
   ngx_null_command
 };
 
@@ -109,6 +116,7 @@ static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
   }
   conf->issue = NGX_CONF_UNSET;
   conf->issue_algorithm = NGX_CONF_UNSET_UINT;
+  conf->verify = NGX_CONF_UNSET;
 
   return conf;
 }
@@ -118,22 +126,29 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
   ngx_http_jwt_loc_conf_t *prev = parent;
   ngx_http_jwt_loc_conf_t *conf = child;
 
-  ngx_conf_merge_str_value(conf->key, prev->key, false);
+  ngx_conf_merge_str_value(conf->key, prev->key, "");
   ngx_conf_merge_value(conf->issue, prev->issue, false);
   ngx_conf_merge_uint_value(conf->issue_algorithm, prev->issue_algorithm, JWT_ALG_NONE);
+  ngx_conf_merge_value(conf->verify, prev->verify, false);
 
   return NGX_CONF_OK;
 }
 
 // Post configuration - add request handler
 static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
-  // Install jwt_issue_filter
+  // Install jwt_issue filters
   ngx_http_next_header_filter = ngx_http_top_header_filter;
   ngx_http_top_header_filter = ngx_http_jwt_issue_header_filter;
-
   ngx_http_next_body_filter = ngx_http_top_body_filter;
   ngx_http_top_body_filter = ngx_http_jwt_issue_body_filter;
 
+  // Install jwt_verify handler
+  ngx_http_core_main_conf_t *cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+  ngx_http_handler_pt *h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+  if (h == NULL) {
+    return NGX_ERROR;
+  }
+  *h = ngx_http_jwt_verify_handler;
   return NGX_OK;
 }
 
@@ -206,4 +221,52 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   }
 
   return ngx_http_next_body_filter(r, in);
+}
+
+ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
+  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  if (!conf->verify) {
+    return NGX_OK;
+  }
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_verify_handler");
+
+  if (conf->key.len == 0) {
+    ngx_log_stderr(0, "jwt_verify: missing 'jwt_key'");
+    return NGX_ERROR;
+  }
+
+  if (!r->headers_in.authorization) {
+    return NGX_HTTP_UNAUTHORIZED;
+  }
+  ngx_log_stderr(0, "auth: %s", r->headers_in.authorization->value.data);
+
+  jwt_t* token;
+  // TODO(SN): this segfaults if key is incorrect
+  if (jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
+                 conf->key.data, conf->key.len) < 0) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_verify jwt_decode: %s", strerror(errno));
+    return NGX_HTTP_UNAUTHORIZED;
+  }
+  char *token_str = jwt_dump_str(token, false);
+  char *payload = ngx_strstr(token_str, ".");
+  if (payload == NULL || payload + 1 >= payload + strlen(payload)) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_verify: no '.' in token");
+    return NGX_HTTP_UNAUTHORIZED;
+  }
+  payload++;
+  ngx_log_stderr(0, "payload: %s", payload);
+
+  ngx_table_elt_t *header = ngx_list_push(&r->headers_out.headers);
+  if (header == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_verify: error creating header");
+    return NGX_HTTP_UNAUTHORIZED;
+  }
+  header->hash = 1;
+  ngx_str_set(&header->key, "authorization");
+  ngx_str_set(&header->value, payload);
+
+  return NGX_OK;
 }
