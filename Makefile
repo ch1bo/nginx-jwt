@@ -1,5 +1,6 @@
 .PHONY: build
 build: nginx/Makefile
+	$(MAKE) -C build
 	$(MAKE) -C nginx
 
 start: build
