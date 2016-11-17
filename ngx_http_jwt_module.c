@@ -11,7 +11,7 @@ typedef struct {
   ngx_flag_t issue;
   ngx_uint_t issue_algorithm;
   ngx_flag_t verify;
-} ngx_http_jwt_loc_conf_t;
+} ngx_http_jwt_conf_t;
 
 typedef struct {
 } ngx_http_jwt_ctx_t;
@@ -44,28 +44,28 @@ static ngx_conf_enum_t ngx_http_jwt_algorithms[] = {
 // Directives
 static ngx_command_t ngx_http_jwt_commands[] = {
   { ngx_string("jwt_key"),
-    NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+    NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
     ngx_conf_set_str_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
-    offsetof(ngx_http_jwt_loc_conf_t, key),
+    offsetof(ngx_http_jwt_conf_t, key),
     NULL },
   { ngx_string("jwt_issue"),
     NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
     ngx_conf_set_flag_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
-    offsetof(ngx_http_jwt_loc_conf_t, issue),
+    offsetof(ngx_http_jwt_conf_t, issue),
     NULL },
   { ngx_string("jwt_issue_algorithm"),
     NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
     ngx_conf_set_enum_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
-    offsetof(ngx_http_jwt_loc_conf_t, issue_algorithm),
+    offsetof(ngx_http_jwt_conf_t, issue_algorithm),
     &ngx_http_jwt_algorithms },
   { ngx_string("jwt_verify"),
     NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
     ngx_conf_set_flag_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
-    offsetof(ngx_http_jwt_loc_conf_t, verify),
+    offsetof(ngx_http_jwt_conf_t, verify),
     NULL },
   ngx_null_command
 };
@@ -108,9 +108,9 @@ static ngx_http_output_body_filter_pt ngx_http_next_body_filter;
 
 // Create location configuration
 static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
-  ngx_http_jwt_loc_conf_t  *conf;
+  ngx_http_jwt_conf_t  *conf;
 
-  conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_loc_conf_t));
+  conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_conf_t));
   if (conf == NULL) {
     return NULL;
   }
@@ -123,8 +123,8 @@ static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
 
 // Merge location configuration
 static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
-  ngx_http_jwt_loc_conf_t *prev = parent;
-  ngx_http_jwt_loc_conf_t *conf = child;
+  ngx_http_jwt_conf_t *prev = parent;
+  ngx_http_jwt_conf_t *conf = child;
 
   ngx_conf_merge_str_value(conf->key, prev->key, "");
   ngx_conf_merge_value(conf->issue, prev->issue, false);
@@ -153,7 +153,7 @@ static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
 }
 
 static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
-  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
   if (!conf->issue) {
     return ngx_http_next_header_filter(r);
   }
@@ -165,7 +165,7 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
-  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
   if (!conf->issue) {
     return ngx_http_next_body_filter(r, in);
   }
@@ -224,7 +224,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
 }
 
 ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
-  ngx_http_jwt_loc_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+  ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
   if (!conf->verify) {
     return NGX_OK;
   }
