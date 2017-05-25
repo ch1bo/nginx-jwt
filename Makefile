@@ -47,6 +47,10 @@ start: build
 	mkdir -p tmp
 	cd tmp && LD_LIBRARY_PATH=../build/lib ../nginx/objs/nginx -c ../nginx.conf
 
+.PHONY: test
+test: image
+	cd test && ./driver
+
 image:
 	docker build -t nginx-jwt .
 

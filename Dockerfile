@@ -46,5 +46,3 @@ RUN useradd nginx
 WORKDIR /
 EXPOSE 80
 CMD ["nginx"]
-# Custom nginx configuration
-COPY nginx.conf /etc/nginx/nginx.conf

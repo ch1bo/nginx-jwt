@@ -1,0 +1,12 @@
+version: "2"
+
+services:
+  nginx-jwt:
+    image: nginx-jwt
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+  runner:
+    build: .
+    volumes:
+      - ./index.js:/test/index.js

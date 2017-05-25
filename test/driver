@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+project=nginxjwttest
+function compose {
+  docker-compose -p ${project} $@ > /dev/null
+}
+function cleanup {
+  compose down -v
+}
+trap cleanup EXIT
+compose build && compose up -d && docker attach ${project}_runner_1
