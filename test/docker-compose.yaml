@@ -1,12 +1,20 @@
 version: "2"
 
 services:
+  runner:
+    build: runner
+    volumes:
+      - ./index.js:/test/index.js
+    links:
+      - nginx-jwt
+
   nginx-jwt:
     image: nginx-jwt
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    links:
+      - api
 
-  runner:
-    build: .
-    volumes:
-      - ./index.js:/test/index.js
+  api:
+    build: api
+

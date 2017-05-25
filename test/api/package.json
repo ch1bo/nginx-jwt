@@ -1,0 +1,14 @@
+{
+  "name": "nginx-jwt-api",
+  "version": "1.0.0",
+  "description": "Mock api for nginx-jwt integration tests",
+  "author": "Sebastian Nagel <sebastian.nagel@ncoding.at>",
+  "license": "MIT",
+  "dependencies": {
+    "babel-cli": "^6.24.1",
+    "babel-preset-es2015": "^6.24.1",
+    "body-parser": "^1.17.2",
+    "express": "^4.15.3",
+    "morgan": "^1.8.2"
+  }
+}

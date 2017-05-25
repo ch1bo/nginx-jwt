@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-project=nginxjwttest
-function compose {
-  docker-compose -p ${project} $@ > /dev/null
-}
 function cleanup {
-  compose down -v
+  docker-compose kill
+  docker-compose down -v
 }
 trap cleanup EXIT
-compose build && compose up -d && docker attach ${project}_runner_1
+docker-compose build && docker-compose up -d && docker attach test_runner_1
