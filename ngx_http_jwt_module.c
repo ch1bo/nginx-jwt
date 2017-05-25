@@ -204,6 +204,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
                     "jwt_issue jwt_add_grants: %s", strerror(errno));
       return ngx_http_next_body_filter(r, in);
     }
+    // TODO(SN): issue ttl
     // Write token to a single buffer
     // TODO(SN): buffer writing broken
     char *d = jwt_encode_str(token);
@@ -248,13 +249,20 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   ngx_log_stderr(0, "auth: %s", r->headers_in.authorization->value.data);
 
   jwt_t* token;
-  // TODO(SN): this segfaults if key is incorrect
-  if (jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
-                 conf->key.data, conf->key.len) < 0) {
+  int ret = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
+                       conf->key.data, conf->key.len);
+  if (ret) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                  "jwt_verify jwt_decode: %s", strerror(errno));
+                  "jwt_verify: error on decode: %s", strerror(errno));
     return NGX_HTTP_UNAUTHORIZED;
   }
+  if (jwt_get_alg(token) == JWT_ALG_NONE) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_verify: alg=\"none\" rejected");
+    return NGX_HTTP_UNAUTHORIZED;
+  }
+  // TODO(SN): verify ttl
+  // Extract payload and modify header
   char *token_str = jwt_dump_str(token, false);
   char *payload = ngx_strstr(token_str, ".");
   if (payload == NULL || payload + 1 >= payload + strlen(payload)) {
@@ -264,7 +272,6 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   }
   payload++;
   ngx_log_stderr(0, "payload: %s", payload);
-
   ngx_table_elt_t *header = ngx_list_push(&r->headers_out.headers);
   if (header == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
@@ -274,6 +281,5 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   header->hash = 1;
   ngx_str_set(&header->key, "authorization");
   ngx_str_set(&header->value, payload);
-
   return NGX_OK;
 }

@@ -16,7 +16,9 @@ nginx/Makefile: nginx $(BUILDDIR)/include/jwt.h
 		--add-module=..
 
 .PHONY: libjwt
-libjwt: $(BUILDDIR)/include/jwt.h
+libjwt: libjwt/Makefile
+	$(MAKE) -C libjwt
+	$(MAKE) -C libjwt install
 
 $(BUILDDIR)/include/jwt.h: libjwt/Makefile
 	$(MAKE) -C libjwt
