@@ -223,6 +223,8 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
     buf->last_buf = true;
     out->buf = buf;
     out->next = NULL;
+    // TODO(SN): recv() failed error?
+    // nginx-jwt_1  | 2017/05/25 15:59:25 [info] 7#0: *3 recv() failed (104: Connection reset by peer) while sending to client, client: 172.19.0.4, server: , request: "POST /login HTTP/1.1", upstream: "http://172.19.0.2:80/login", host: "nginx-jwt"
     return ngx_http_next_body_filter(r, out);
   }
   return ngx_http_next_body_filter(r, in);
