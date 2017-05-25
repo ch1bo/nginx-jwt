@@ -1,13 +1,14 @@
 PWD=$(shell pwd)
-build_dir=$(PWD)/build
+BUILDDIR=$(PWD)/build
+NGINX_VERSION=1.13.0
 
 .PHONY: build
 build: nginx/Makefile
 	$(MAKE) -C nginx
 
-nginx/Makefile: nginx $(build_dir)/include/jwt.h
+nginx/Makefile: nginx $(BUILDDIR)/include/jwt.h
 	cd nginx; \
-	LIBJWT_INC=$(build_dir)/include LIBJWT_LIB=$(build_dir)/lib \
+	LIBJWT_INC=$(BUILDDIR)/include LIBJWT_LIB=$(BUILDDIR)/lib \
 	./configure --prefix="." \
 		--conf-path="nginx.conf" \
 		--error-log-path="error.log" \
@@ -15,32 +16,32 @@ nginx/Makefile: nginx $(build_dir)/include/jwt.h
 		--add-module=..
 
 .PHONY: libjwt
-libjwt: $(build_dir)/include/jwt.h
+libjwt: $(BUILDDIR)/include/jwt.h
 
-$(build_dir)/include/jwt.h: libjwt/Makefile
+$(BUILDDIR)/include/jwt.h: libjwt/Makefile
 	$(MAKE) -C libjwt
 	$(MAKE) -C libjwt install
 
-libjwt/Makefile: $(build_dir)/lib/pkgconfig/jansson.pc
+libjwt/Makefile: $(BUILDDIR)/lib/pkgconfig/jansson.pc
 	cd libjwt && \
 	autoreconf -i && \
-	PKG_CONFIG_PATH=$(build_dir)/lib/pkgconfig ./configure --prefix="$(build_dir)"
+	PKG_CONFIG_PATH=$(BUILDDIR)/lib/pkgconfig ./configure --prefix="$(BUILDDIR)"
 
 .PHONY: jansson
-jansson: $(build_dir)/lib/pkgconfig/jansson.pc
+jansson: $(BUILDDIR)/lib/pkgconfig/jansson.pc
 
-$(build_dir)/lib/pkgconfig/jansson.pc: jansson/Makefile
+$(BUILDDIR)/lib/pkgconfig/jansson.pc: jansson/Makefile
 	$(MAKE) -C jansson
 	$(MAKE) -C jansson install
 
 jansson/Makefile:
 	cd jansson && \
   autoreconf -i && \
-	./configure --prefix="$(build_dir)"
+	./configure --prefix="$(BUILDDIR)"
 
 nginx:
 	mkdir -p nginx && \
-	curl http://nginx.org/download/nginx-1.13.0.tar.gz | tar -C nginx -xz --strip-components=1
+	curl https://nginx.org/download/nginx-$(NGINX_VERSION).tar.gz | tar -xzC nginx --strip-components=1
 
 start: build
 	mkdir -p tmp

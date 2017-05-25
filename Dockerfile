@@ -2,29 +2,37 @@
 FROM buildpack-deps:jessie-curl
 RUN apt-get update && \
     apt-get install --no-install-recommends --no-install-suggests -y \
+            automake \
             gcc \
             libc6-dev \
+            libjansson-dev \
             libpcre3-dev \
+            libssl-dev \
+            libtool \
             libz-dev \
             make \
-            cmake \
             pkg-config \
-            libssl-dev \
-            libjansson-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Add nginx source
+RUN mkdir -p /usr/src/nginx && \
+    curl -SL https://nginx.org/download/nginx-1.13.0.tar.gz \
+    | tar -xzC /usr/src/nginx
+
 # Install libjwt
 COPY libjwt /usr/src/libjwt
 WORKDIR /usr/src/libjwt
-RUN cmake . -DCMAKE_INSTALL_PREFIX=/usr && make && make install
-# Add nginx source
-RUN mkdir -p /usr/src/nginx && \
-    curl -SL http://nginx.org/download/nginx-1.11.5.tar.gz \
-    | tar -xzC /usr/src/nginx
+RUN autoreconf -i && \
+    ./configure --prefix="/usr/" && \
+    make && \
+    make install
+
 # Add module source
 COPY config /usr/src/nginx/nginx-jwt/
 COPY ngx_http_jwt_module.c /usr/src/nginx/nginx-jwt/
+
 # Build with nginx from source
-WORKDIR /usr/src/nginx/nginx-1.11.5
+WORKDIR /usr/src/nginx/nginx-1.13.0
 RUN ./configure \
     --prefix="/usr" \
     --conf-path="/etc/nginx/nginx.conf" \
@@ -33,6 +41,7 @@ RUN ./configure \
     --http-log-path="/var/log/nginx/access.log" \
     --add-module=../nginx-jwt
 RUN make && make install
+
 RUN useradd nginx
 WORKDIR /
 EXPOSE 80

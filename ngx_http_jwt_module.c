@@ -171,55 +171,60 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   }
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
 
-  for (ngx_chain_t *cl = in; cl; cl = cl->next) {
-    size_t len = ngx_buf_size(cl->buf);
+  size_t len;
+  char *body = NULL;
+  ngx_chain_t *cl;
+  for (cl = in; cl; cl = cl->next) {
+    len = ngx_buf_size(cl->buf);
     if (len > 0) {
       // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
       // instead of null terminated string
-      char *body = ngx_pcalloc(r->pool, len+1);
+      body = ngx_pcalloc(r->pool, len+1);
       bzero(body, len+1);
       memcpy(body, cl->buf->pos, len);
       ngx_log_stderr(0, "buf: (%d) %s", len, body);
+      break;
       // TODO(SN): concatenate buffers before creating token?
-      jwt_t* token;
-      if (jwt_new(&token) < 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                      "jwt_issue jwt_new: %s", strerror(errno));
-        return NGX_ERROR;
-      }
-      if (jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len) < 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                      "jwt_issue jwt_set_alg: %s", strerror(errno));
-        return ngx_http_next_body_filter(r, in);
-      }
-      if (jwt_add_grants_json(token, body) < 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                      "jwt_issue jwt_add_grants: %s", strerror(errno));
-        return ngx_http_next_body_filter(r, in);
-      }
-      // Write token to a single buffer
-      // TODO(SN): buffer writing broken
-      char *d = jwt_encode_str(token);
-      size_t dlen = strlen(d);
-      ngx_log_stderr(0, "token: (%d) %s", dlen, d);
-      ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
-      if (out == NULL) {
-        return NGX_ERROR;
-      }
-      ngx_buf_t *buf = ngx_alloc_buf(r->pool);
-      if (buf == NULL) {
-        return NGX_ERROR;
-      }
-      buf->pos = buf->start = (unsigned char *)d;
-      buf->last = buf->end = (unsigned char *)d + dlen;
-      buf->memory = true;
-      buf->last_buf = true;
-      out->buf = buf;
-      out->next = NULL;
-      return ngx_http_next_body_filter(r, out);
     }
   }
-
+  if (body != NULL) {
+    jwt_t* token;
+    if (jwt_new(&token) < 0) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_issue jwt_new: %s", strerror(errno));
+      return NGX_ERROR;
+    }
+    if (jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len) < 0) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_issue jwt_set_alg: %s", strerror(errno));
+      return ngx_http_next_body_filter(r, in);
+    }
+    if (jwt_add_grants_json(token, body) < 0) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_issue jwt_add_grants: %s", strerror(errno));
+      return ngx_http_next_body_filter(r, in);
+    }
+    // Write token to a single buffer
+    // TODO(SN): buffer writing broken
+    char *d = jwt_encode_str(token);
+    size_t dlen = strlen(d);
+    ngx_log_stderr(0, "token: (%d) %s", dlen, d);
+    ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
+    if (out == NULL) {
+      return NGX_ERROR;
+    }
+    ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+    if (buf == NULL) {
+      return NGX_ERROR;
+    }
+    buf->pos = buf->start = (unsigned char *)d;
+    buf->last = buf->end = (unsigned char *)d + dlen;
+    buf->memory = true;
+    buf->last_buf = true;
+    out->buf = buf;
+    out->next = NULL;
+    return ngx_http_next_body_filter(r, out);
+  }
   return ngx_http_next_body_filter(r, in);
 }
 
