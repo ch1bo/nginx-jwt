@@ -13,7 +13,12 @@ typedef struct {
   ngx_flag_t verify;
 } ngx_http_jwt_conf_t;
 
+// TODO(SN): make this configurable - use client_body_buffer_size or own directive?
+# define NGX_JWT_BODY_BUFFER_SIZE 1048576  // 1m - default client_max_body_size
+
 typedef struct {
+  char body_buffer[NGX_JWT_BODY_BUFFER_SIZE];
+  ngx_uint_t body_buffer_pos;
 } ngx_http_jwt_ctx_t;
 
 // Function forward declaration
@@ -158,6 +163,20 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
     return ngx_http_next_header_filter(r);
   }
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_header_filter");
+
+  ngx_http_jwt_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
+  if (ctx == NULL) {
+    ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_jwt_ctx_t));
+    if (ctx == NULL) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_issue: error creating context");
+      return NGX_ERROR;
+    }
+    ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
+  }
+  bzero(ctx->body_buffer, NGX_JWT_BODY_BUFFER_SIZE);
+  ctx->body_buffer_pos = 0;
+
   // chunked encoding and connection close
   ngx_http_clear_content_length(r);
   r->keepalive = false;
@@ -171,64 +190,82 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   }
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
 
+  ngx_http_jwt_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
+  if (ctx == NULL) {
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_issue: context should exist");
+    return NGX_ERROR;
+  }
+
+  // Collect all chain buffers in context body buffer
   size_t len;
-  char *body = NULL;
   ngx_chain_t *cl;
   for (cl = in; cl; cl = cl->next) {
     len = ngx_buf_size(cl->buf);
     if (len > 0) {
+      if (ctx->body_buffer_pos + len > NGX_JWT_BODY_BUFFER_SIZE - 1) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "jwt_issue: cannot issue token from too large body, max is %O bytes",
+                      NGX_JWT_BODY_BUFFER_SIZE);
+        return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
+      }
+      memcpy(ctx->body_buffer + ctx->body_buffer_pos, cl->buf->pos, len);
+      ctx->body_buffer_pos += len;
+      ngx_log_stderr(0, "buffering %d bytes", len);
+    }
+    if (cl->buf->last_buf && ctx->body_buffer_pos > 0) {
       // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
-      // instead of null terminated string
-      body = ngx_pcalloc(r->pool, len+1);
-      bzero(body, len+1);
-      memcpy(body, cl->buf->pos, len);
-      ngx_log_stderr(0, "buf: (%d) %s", len, body);
-      break;
-      // TODO(SN): concatenate buffers before creating token?
+      // instead of requiring null terminated string in jwt_add_grants_json
+      ctx->body_buffer[ctx->body_buffer_pos] = '\0';
+      ngx_log_stderr(0, "body buffer: (%d) %s", ctx->body_buffer_pos, ctx->body_buffer);
+      ctx->body_buffer_pos = 0;
+      // Create token from body buffer
+      jwt_t* token;
+      int err = jwt_new(&token);
+      if (err) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                      "jwt_issue jwt_new: %s", strerror(errno));
+        return NGX_ERROR;
+      }
+      err = jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len);
+      if (err) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                      "jwt_issue jwt_set_alg: %s", strerror(errno));
+        return ngx_http_next_body_filter(r, in);
+      }
+      err = jwt_add_grants_json(token, ctx->body_buffer);
+      if (err) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                      "jwt_issue jwt_add_grants: %s", strerror(errno));
+        return ngx_http_next_body_filter(r, in);
+      }
+
+      // TODO(SN): issue ttl
+      // Write token to a single buffer
+      // TODO(SN): buffer writing broken
+      char *d = jwt_encode_str(token);
+      size_t dlen = strlen(d);
+      ngx_log_stderr(0, "token: (%d) %s", dlen, d);
+      ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
+      if (out == NULL) {
+        return NGX_ERROR;
+      }
+      ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+      if (buf == NULL) {
+        return NGX_ERROR;
+      }
+      buf->pos = buf->start = (unsigned char *)d;
+      buf->last = buf->end = (unsigned char *)d + dlen;
+      buf->memory = true;
+      buf->last_buf = true;
+      out->buf = buf;
+      out->next = NULL;
+      // TODO(SN): recv() failed error?
+      // nginx-jwt_1  | 2017/05/25 15:59:25 [info] 7#0: *3 recv() failed (104: Connection reset by peer) while sending to client, client: 172.19.0.4, server: , request: "POST /login HTTP/1.1", upstream: "http://172.19.0.2:80/login", host: "nginx-jwt"
+      return ngx_http_next_body_filter(r, out);
     }
   }
-  if (body != NULL) {
-    jwt_t* token;
-    if (jwt_new(&token) < 0) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                    "jwt_issue jwt_new: %s", strerror(errno));
-      return NGX_ERROR;
-    }
-    if (jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len) < 0) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                    "jwt_issue jwt_set_alg: %s", strerror(errno));
-      return ngx_http_next_body_filter(r, in);
-    }
-    if (jwt_add_grants_json(token, body) < 0) {
-      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                    "jwt_issue jwt_add_grants: %s", strerror(errno));
-      return ngx_http_next_body_filter(r, in);
-    }
-    // TODO(SN): issue ttl
-    // Write token to a single buffer
-    // TODO(SN): buffer writing broken
-    char *d = jwt_encode_str(token);
-    size_t dlen = strlen(d);
-    ngx_log_stderr(0, "token: (%d) %s", dlen, d);
-    ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
-    if (out == NULL) {
-      return NGX_ERROR;
-    }
-    ngx_buf_t *buf = ngx_alloc_buf(r->pool);
-    if (buf == NULL) {
-      return NGX_ERROR;
-    }
-    buf->pos = buf->start = (unsigned char *)d;
-    buf->last = buf->end = (unsigned char *)d + dlen;
-    buf->memory = true;
-    buf->last_buf = true;
-    out->buf = buf;
-    out->next = NULL;
-    // TODO(SN): recv() failed error?
-    // nginx-jwt_1  | 2017/05/25 15:59:25 [info] 7#0: *3 recv() failed (104: Connection reset by peer) while sending to client, client: 172.19.0.4, server: , request: "POST /login HTTP/1.1", upstream: "http://172.19.0.2:80/login", host: "nginx-jwt"
-    return ngx_http_next_body_filter(r, out);
-  }
-  return ngx_http_next_body_filter(r, in);
+  return NGX_OK;
 }
 
 ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
@@ -249,9 +286,9 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   ngx_log_stderr(0, "auth: %s", r->headers_in.authorization->value.data);
 
   jwt_t* token;
-  int ret = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
+  int err = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
                        conf->key.data, conf->key.len);
-  if (ret) {
+  if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on decode: %s", strerror(errno));
     return NGX_HTTP_UNAUTHORIZED;

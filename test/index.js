@@ -20,13 +20,22 @@ describe('nginx_jwt', () => {
       return JSON.parse(new Buffer(data, 'base64').toString('ascii'));
     }
 
-    function assertToken(expectedAlg, expectedBody, data) {
+    function parseToken(data) {
       const parts = data.split('.');
-      const header = parseBase64(parts[0]);
+      return {
+        header: parseBase64(parts[0]),
+        body: parseBase64(parts[1])
+      };
+    }
+
+    function assertHeader(expectedAlg, header) {
       assert.equal('JWT', header.typ);
-      assert.equal(expectedAlg, header.alg);
-      const body = parseBase64(parts[1]);
-      assert.deepEqual(expectedBody, body);
+      assert.equal(header.alg, expectedAlg);
+    }
+
+    function assertToken(expectedAlg, expectedBody, token) {
+      assertHeader(expectedAlg, token.header);
+      assert.deepEqual(token.body, expectedBody);
     }
 
     it('returns token in response body', () => {
@@ -36,14 +45,33 @@ describe('nginx_jwt', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(expected)
       }).then((response) => response.text())
-        .then((data) => assertToken('HS512', expected, data));
+        .then(parseToken)
+        .then((token) => assertToken('HS512', expected, token));
     });
 
-    // TODO(SN): it('supports large bodies')
+    it('supports large (~800K) bodies', () => {
+      // TODO(SN): off-by-one / alignment issue? other tests fail with some body lengths
+      // const manyGrants = Array.from({length: 200}, () => 'grant');
+      const manyGrants = Array.from({length: 100000}, () => 'grant');
+      const largeBody = { password: 'secret', authorization: manyGrants };
+      console.log(JSON.stringify(largeBody).length);
+      return fetch('http://nginx-jwt/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(largeBody)
+      }).then((response) => response.text())
+        .then((data) => {
+          console.log(data.length);
+          const token = parseToken(data);
+          // assertToken('HS512', largeBody, data);
+          assertHeader('HS512', token.header);
+        });
+    });
+
+    // TODO(SN): it('returns 413 on too large (> 1M) bodies')
   });
 
   describe('jwt_verify', () => {
-
     function encodeBase64(json) {
       return new Buffer(JSON.stringify(json)).toString('base64');
     }
@@ -51,7 +79,7 @@ describe('nginx_jwt', () => {
     it('returns 401 without token', () => {
       return fetch('http://nginx-jwt/api')
         .then((response) => {
-          assert.equal(401, response.status);
+          assert.equal(response.status, 401);
         });
     });
 
@@ -59,7 +87,7 @@ describe('nginx_jwt', () => {
       return fetch('http://nginx-jwt/api', {
         headers: { authorization: 'definitely not a token' }
       }).then((response) => {
-        assert.equal(401, response.status);
+        assert.equal(response.status, 401);
       });
     });
 
@@ -71,7 +99,7 @@ describe('nginx_jwt', () => {
       return fetch('http://nginx-jwt/api', {
         headers: { authorization: invalidToken }
       }).then((response) => {
-        assert.equal(401, response.status);
+        assert.equal(response.status, 401);
       });
     });
 
@@ -87,7 +115,7 @@ describe('nginx_jwt', () => {
            headers: { authorization: token }
          });
         })
-        .then((response) => assert.equal(200, response.status));
+        .then((response) => assert.equal(response.status, 200));
     });
   });
 });
