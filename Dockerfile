@@ -39,8 +39,7 @@ RUN ./configure \
     --pid-path="/var/run/nginx.pid" \
     --error-log-path="/var/log/nginx/error.log" \
     --http-log-path="/var/log/nginx/access.log" \
-    --add-module=../nginx-jwt \
-    --with-debug
+    --add-module=../nginx-jwt
 RUN make && make install
 
 RUN useradd nginx

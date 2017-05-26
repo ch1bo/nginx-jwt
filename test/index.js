@@ -46,52 +46,32 @@ describe('nginx_jwt', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(expected)
       }).then((response) => response.text())
-        .then((data) => {
-          console.log(data.length);
-          return data;
-        })
         .then(parseToken)
         .then((token) => assertToken('HS512', expected, token));
     });
 
     it('supports large (~800K) bodies', () => {
-      // TODO(SN): off-by-one / alignment issue? other tests fail with some body lengths
-      const manyGrants = Array.from({length: 200}, () => 'grant');
-      // const manyGrants = Array.from({length: 100000}, () => 'grant');
-      const largeBody = { password: 'secret', authorization: manyGrants };
-      console.log(JSON.stringify(largeBody).length);
+      const manyGrants = Array.from({length: 100000}, () => 'grant');
       return fetch('http://nginx-jwt/login', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(largeBody)
+        body: JSON.stringify({ password: 'secret', authorization: manyGrants })
       }).then((response) => response.text())
-        .then((data) => {
-          console.log(data.length);
-          const token = parseToken(data);
-          // assertToken('HS512', largeBody, data);
-          assertHeader('HS512', token.header);
-        });
-    });
-
-    it('returns token in response body 2', () => {
-      const expected = { user: 'test', password: 'secret' };
-      return fetch('http://nginx-jwt/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(expected)
-      }).then((response) => response.text())
-        .then((data) => {
-          console.log(data.length);
-          return data;
-        })
         .then(parseToken)
-        .then((token) => assertToken('HS512', expected, token));
+        .then((token) => assertHeader('HS512', token.header));
     });
 
-    // TODO(SN): it('returns 413 on too large (> 1M) bodies')
+    it('returns 413 on too large (> 1M) bodies', () => {
+      const tooManyGrants = Array.from({length: 200000}, () => 'auth');
+      return fetch('http://nginx-jwt/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'secret', authorization: tooManyGrants })
+      }).then((response) => assert.equal(response.status, 413));
+    });
   });
 
-  describe.skip('jwt_verify', () => {
+  describe('jwt_verify', () => {
     function encodeBase64(json) {
       return new Buffer(JSON.stringify(json)).toString('base64');
     }

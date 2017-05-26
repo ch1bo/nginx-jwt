@@ -159,13 +159,15 @@ static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf) {
 }
 
 static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_header_filter");
+
   ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
   if (!conf->issue) {
     return ngx_http_next_header_filter(r);
   }
-  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_header_filter");
 
   off_t len = r->headers_out.content_length_n;
+  ngx_log_stderr(0, "header: content length %d -> %d", r->headers_in.content_length_n, len);
   if (len > 0 && len > NGX_JWT_BODY_BUFFER_SIZE) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "jwt_issue: cannot issue token from too large body, max is %O bytes",
@@ -174,13 +176,17 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
   }
 
   ngx_http_jwt_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
-  ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_jwt_ctx_t));
   if (ctx == NULL) {
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                  "jwt_issue: error creating context");
-    return NGX_ERROR;
+    ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_jwt_ctx_t));
+    if (ctx == NULL) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_issue: error creating context");
+      return NGX_ERROR;
+    }
+    ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
+  } else {
+    ngx_log_stderr(0, "ctx already initialized!!");
   }
-  ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
 
   // content_length_n == -1 means chunked encoding
   if (len == -1) {
@@ -193,11 +199,18 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 }
 
 static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
+
+  ngx_log_stderr(0, "request status %d", r->headers_out.status);
+
   ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
-  if (!conf->issue || in == NULL) {
+  if (!conf->issue || in == NULL || r->headers_out.status != NGX_HTTP_OK) {
+    ngx_int_t rc = ngx_http_next_header_filter(r);
+    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
+      return NGX_ERROR;
+    }
     return ngx_http_next_body_filter(r, in);
   }
-  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
 
   ngx_http_jwt_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_jwt_module);
   if (ctx == NULL) {
@@ -248,12 +261,12 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
                   "jwt_issue jwt_new: %s", strerror(errno));
     return NGX_ERROR;
   }
-  // TODO(SN): free token using ngx_pool_cleanup_add
+  // TODO(SN): free token using ngx_pool_cleanup_add?
   err = jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len);
   if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_set_alg: %s", strerror(errno));
-    return ngx_http_next_body_filter(r, in);
+    return NGX_ERROR;
   }
   // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
   // instead of requiring null terminated string in jwt_add_grants_json
@@ -263,7 +276,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_add_grants: %s", strerror(errno));
-    return ngx_http_next_body_filter(r, in);
+    return NGX_ERROR;
   }
   // TODO(SN): issue ttl
   // Write token to a single buffer and update headers
@@ -271,7 +284,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   if (token_data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_encode_str: %s", strerror(errno));
-    return ngx_http_next_body_filter(r, in);
+    return NGX_ERROR;
   }
   // TODO(SN): free token
   size_t token_size = strlen(token_data);
@@ -280,7 +293,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   if (out == NULL) {
     return NGX_ERROR;
   }
-  ngx_buf_t *buf = ngx_alloc_buf(r->pool);
+  ngx_buf_t *buf = ngx_calloc_buf(r->pool);
   if (buf == NULL) {
     return NGX_ERROR;
   }
@@ -290,7 +303,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   buf->last_buf = true;
   out->buf = buf;
   out->next = NULL;
-  r->headers_out.content_length_n = buf->end - buf->start;
+  r->headers_out.content_length_n = token_size;
 
   ngx_int_t rc = ngx_http_next_header_filter(r);
   if (rc == NGX_ERROR || rc > NGX_OK || r->header_only) {
