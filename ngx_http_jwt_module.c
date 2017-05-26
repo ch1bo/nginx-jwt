@@ -10,11 +10,9 @@ typedef struct {
   ngx_str_t key;
   ngx_flag_t issue;
   ngx_uint_t issue_algorithm;
+  size_t issue_buffer_size;
   ngx_flag_t verify;
 } ngx_http_jwt_conf_t;
-
-// TODO(SN): make this configurable - use client_body_buffer_size or own directive?
-# define NGX_JWT_BODY_BUFFER_SIZE 1048576  // 1m - default client_max_body_size
 
 typedef struct {
   size_t length;
@@ -67,6 +65,12 @@ static ngx_command_t ngx_http_jwt_commands[] = {
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof(ngx_http_jwt_conf_t, issue_algorithm),
     &ngx_http_jwt_algorithms },
+  { ngx_string("jwt_issue_buffer_size"),
+    NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+    ngx_conf_set_size_slot,
+    NGX_HTTP_LOC_CONF_OFFSET,
+    offsetof(ngx_http_jwt_conf_t, issue_buffer_size),
+    NULL },
   { ngx_string("jwt_verify"),
     NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
     ngx_conf_set_flag_slot,
@@ -122,6 +126,7 @@ static void * ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
   }
   conf->issue = NGX_CONF_UNSET;
   conf->issue_algorithm = NGX_CONF_UNSET_UINT;
+  conf->issue_buffer_size = NGX_CONF_UNSET_SIZE;
   conf->verify = NGX_CONF_UNSET;
 
   return conf;
@@ -134,7 +139,9 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
 
   ngx_conf_merge_str_value(conf->key, prev->key, "");
   ngx_conf_merge_value(conf->issue, prev->issue, false);
-  ngx_conf_merge_uint_value(conf->issue_algorithm, prev->issue_algorithm, JWT_ALG_NONE);
+  ngx_conf_merge_uint_value(conf->issue_algorithm, prev->issue_algorithm, JWT_ALG_HS512);
+  ngx_conf_merge_size_value(conf->issue_buffer_size, prev->issue_buffer_size,
+                            1 * 1024 * 1024);
   ngx_conf_merge_value(conf->verify, prev->verify, false);
 
   return NGX_CONF_OK;
@@ -168,10 +175,10 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 
   off_t len = r->headers_out.content_length_n;
   ngx_log_stderr(0, "header: content length %d -> %d", r->headers_in.content_length_n, len);
-  if (len > 0 && len > NGX_JWT_BODY_BUFFER_SIZE) {
+  if (len > 0 && len > (off_t)conf->issue_buffer_size) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "jwt_issue: cannot issue token from too large body, max is %O bytes",
-                  NGX_JWT_BODY_BUFFER_SIZE);
+                  conf->issue_buffer_size);
     return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
   }
 
@@ -190,7 +197,7 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 
   // content_length_n == -1 means chunked encoding
   if (len == -1) {
-    ctx->length = NGX_JWT_BODY_BUFFER_SIZE;
+    ctx->length = conf->issue_buffer_size;
   } else {
     ctx->length = (size_t)len + 1; // TODO(SN): no 0-termination
   }
@@ -240,7 +247,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
     if (pos + size > ctx->length - 1) { // TODO(SN): no 0-termination
       ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                     "jwt_issue: cannot issue token from too large body, max is %O bytes",
-                    NGX_JWT_BODY_BUFFER_SIZE);
+                    conf->issue_buffer_size);
       return NGX_HTTP_REQUEST_ENTITY_TOO_LARGE;
     }
     ctx->last = ngx_cpymem(ctx->last, b->pos, size);
