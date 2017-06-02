@@ -232,7 +232,6 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
     if (ctx->body == NULL) {
       return NGX_ERROR;
     }
-    // TODO(SN): memory management, where to free ctx->body?
     ctx->last = ctx->body;
   }
   size_t size;
@@ -253,7 +252,6 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
     ctx->last = ngx_cpymem(ctx->last, b->pos, size);
     b->pos += size;
   }
-  /* TODO(SN): last_in_chain? */
   if (b && !b->last_buf) {
     /* TODO required? r->connection->buffered |= NGX_HTTP_IMAGE_BUFFERED; */
     return NGX_OK;
@@ -262,15 +260,16 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
 
   // Create token from body buffer
   jwt_t* token;
-  int err = jwt_new(&token);
+  int err = jwt_new(&token); // TODO(SN): memory leak
   if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_new: %s", strerror(errno));
     return NGX_ERROR;
   }
-  // TODO(SN): free token using ngx_pool_cleanup_add?
+
   err = jwt_set_alg(token, conf->issue_algorithm, conf->key.data, conf->key.len);
   if (err) {
+    jwt_free(token);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_set_alg: %s", strerror(errno));
     return NGX_ERROR;
@@ -281,19 +280,26 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   ngx_log_stderr(0, "body buffer: (%d/%d) %s", ctx->last - ctx->body, ctx->length, ctx->body);
   err = jwt_add_grants_json(token, (char *)ctx->body);
   if (err) {
+    jwt_free(token);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_add_grants: %s", strerror(errno));
     return NGX_ERROR;
   }
   // TODO(SN): issue ttl
   // Write token to a single buffer and update headers
-  char *token_data = jwt_encode_str(token);
+  char *token_data = jwt_encode_str(token); // TODO(SN): this leaks
+  jwt_free(token);
   if (token_data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_issue jwt_encode_str: %s", strerror(errno));
     return NGX_ERROR;
   }
-  // TODO(SN): free token
+  ngx_pool_cleanup_t *cleanup = ngx_pool_cleanup_add(r->pool, 0);
+  if (cleanup == NULL) {
+    return NGX_ERROR;
+  }
+  cleanup->handler = free;
+  cleanup->data = token_data;
   size_t token_size = strlen(token_data);
   ngx_log_stderr(0, "token: (%d) %s", token_size, token_data);
   ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
@@ -306,7 +312,7 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   }
   buf->pos = buf->start = (unsigned char*) token_data;
   buf->last = buf->end = (unsigned char*) token_data + token_size;
-  buf->memory = true;
+  buf->memory = true; // buffer is in read-only memory
   buf->last_buf = true;
   out->buf = buf;
   out->next = NULL;
@@ -345,29 +351,37 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
     return NGX_HTTP_UNAUTHORIZED;
   }
   if (jwt_get_alg(token) == JWT_ALG_NONE) {
+    jwt_free(token);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: alg=\"none\" rejected");
     return NGX_HTTP_UNAUTHORIZED;
   }
   // TODO(SN): verify ttl
-  // Extract payload and modify header
-  char *token_str = jwt_dump_str(token, false);
-  char *payload = ngx_strstr(token_str, ".");
-  if (payload == NULL || payload + 1 >= payload + strlen(payload)) {
+  // Extract grants and modify header
+  char *grants = jwt_get_grants_json(token, NULL);
+  jwt_free(token);
+  if (token_str == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                  "jwt_verify: no '.' in token");
+                  "jwt_verify: error on jwt_dump_str: %s", strerror(errno));
     return NGX_HTTP_UNAUTHORIZED;
   }
-  payload++;
-  ngx_log_stderr(0, "payload: %s", payload);
+  ngx_pool_cleanup_t *cleanup = ngx_pool_cleanup_add(r->pool, 0);
+  if (cleanup == NULL) {
+    free(grants);
+    return NGX_ERROR;
+  }
+  cleanup->handler = free;
+  cleanup->data = grants;
+  ngx_log_stderr(0, "grants: %s", grants);
   ngx_table_elt_t *header = ngx_list_push(&r->headers_out.headers);
   if (header == NULL) {
+    free(token_str);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error creating header");
     return NGX_HTTP_UNAUTHORIZED;
   }
   header->hash = 1;
   ngx_str_set(&header->key, "authorization");
-  ngx_str_set(&header->value, payload);
+  ngx_str_set(&header->value, grants);
   return NGX_OK;
 }

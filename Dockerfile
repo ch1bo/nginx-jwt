@@ -12,6 +12,7 @@ RUN apt-get update && \
             libz-dev \
             make \
             pkg-config \
+            valgrind \
     && rm -rf /var/lib/apt/lists/*
 
 # Add nginx source
@@ -27,11 +28,10 @@ RUN autoreconf -i && \
     make && \
     make install
 
-# Add module source
+# Add module config
 COPY config /usr/src/nginx/nginx-jwt/
-COPY ngx_http_jwt_module.c /usr/src/nginx/nginx-jwt/
 
-# Build with nginx from source
+# Configure nginx
 WORKDIR /usr/src/nginx/nginx-1.13.0
 RUN ./configure \
     --prefix="/usr" \
@@ -40,6 +40,12 @@ RUN ./configure \
     --error-log-path="/var/log/nginx/error.log" \
     --http-log-path="/var/log/nginx/access.log" \
     --add-module=../nginx-jwt
+
+# Add module source (here, for faster recompilation)
+COPY ngx_http_jwt_module.c /usr/src/nginx/nginx-jwt/
+
+# Build nginx
+VOLUME /usr/src/nginx/nginx-1.13.0
 RUN make && make install
 
 RUN useradd nginx
