@@ -253,10 +253,8 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
     b->pos += size;
   }
   if (b && !b->last_buf) {
-    /* TODO required? r->connection->buffered |= NGX_HTTP_IMAGE_BUFFERED; */
     return NGX_OK;
   }
-  /* TODO required? r->connection->buffered &= ~NGX_HTTP_IMAGE_BUFFERED; */
 
   // Create token from body buffer
   jwt_t* token;
@@ -301,7 +299,6 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   cleanup->handler = free;
   cleanup->data = token_data;
   size_t token_size = strlen(token_data);
-  ngx_log_stderr(0, "token: (%d) %s", token_size, token_data);
   ngx_chain_t *out = ngx_alloc_chain_link(r->pool);
   if (out == NULL) {
     return NGX_ERROR;
@@ -340,8 +337,6 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   if (!r->headers_in.authorization) {
     return NGX_HTTP_UNAUTHORIZED;
   }
-  ngx_log_stderr(0, "auth: %s", r->headers_in.authorization->value.data);
-
   jwt_t* token;
   int err = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
                        conf->key.data, conf->key.len);
@@ -358,30 +353,24 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   }
   // TODO(SN): verify ttl
   // Extract grants and modify header
-  char *grants = jwt_get_grants_json(token, NULL);
+  ngx_str_t grants;
+  grants.data = (unsigned char*)jwt_get_grants_json(token, NULL);
   jwt_free(token);
-  if (grants == NULL) {
+  if (grants.data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on jwt_dump_str: %s", strerror(errno));
     return NGX_HTTP_UNAUTHORIZED;
   }
-  ngx_pool_cleanup_t *cleanup = ngx_pool_cleanup_add(r->pool, 0);
-  if (cleanup == NULL) {
-    free(grants);
+  grants.len = strlen((char*)grants.data);
+  ngx_str_t base64;
+  base64.len = ngx_base64_encoded_length(grants.len);
+  base64.data = ngx_palloc(r->pool, base64.len);
+  if (base64.data == NULL) {
+    free(grants.data);
     return NGX_ERROR;
   }
-  cleanup->handler = free;
-  cleanup->data = grants;
-  ngx_log_stderr(0, "grants: %s", grants);
-  ngx_table_elt_t *header = ngx_list_push(&r->headers_out.headers);
-  if (header == NULL) {
-    free(grants);
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                  "jwt_verify: error creating header");
-    return NGX_HTTP_UNAUTHORIZED;
-  }
-  header->hash = 1;
-  ngx_str_set(&header->key, "authorization");
-  ngx_str_set(&header->value, grants);
+  ngx_encode_base64(&base64, &grants);
+  free(grants.data);
+  r->headers_in.authorization->value = base64;
   return NGX_OK;
 }

@@ -14,7 +14,7 @@ describe('nginx_jwt', () => {
 
   // TODO(SN): test with all supported different algs
   // TODO(SN): test with keys from file
-
+  // TODO(SN): test ttl issuing
   describe('jwt_issue', () => {
     function parseBase64(data) {
       return JSON.parse(new Buffer(data, 'base64').toString('ascii'));
@@ -71,6 +71,9 @@ describe('nginx_jwt', () => {
     });
   });
 
+  // TODO(SN): integration test authorization header format behind reverse
+  // proxy, which is the base64 encoded payload (middle) part of the token
+  // TODO(SN): test ttl check
   describe('jwt_verify', () => {
     function encodeBase64(json) {
       return new Buffer(JSON.stringify(json)).toString('base64');
