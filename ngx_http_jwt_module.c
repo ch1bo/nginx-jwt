@@ -360,7 +360,7 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   // Extract grants and modify header
   char *grants = jwt_get_grants_json(token, NULL);
   jwt_free(token);
-  if (token_str == NULL) {
+  if (grants == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on jwt_dump_str: %s", strerror(errno));
     return NGX_HTTP_UNAUTHORIZED;
@@ -375,7 +375,7 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   ngx_log_stderr(0, "grants: %s", grants);
   ngx_table_elt_t *header = ngx_list_push(&r->headers_out.headers);
   if (header == NULL) {
-    free(token_str);
+    free(grants);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error creating header");
     return NGX_HTTP_UNAUTHORIZED;
