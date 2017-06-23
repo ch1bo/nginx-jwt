@@ -5,6 +5,7 @@ NGINX_VERSION=1.13.0
 .PHONY: build
 build: nginx/Makefile
 	$(MAKE) -C nginx
+	cp nginx/objs/nginx $(BUILDDIR)/nginx
 
 nginx/Makefile: nginx $(BUILDDIR)/include/jwt.h
 	cd nginx; \
@@ -44,10 +45,6 @@ jansson/Makefile:
 nginx:
 	mkdir -p nginx && \
 	curl https://nginx.org/download/nginx-$(NGINX_VERSION).tar.gz | tar -xzC nginx --strip-components=1
-
-start: build
-	mkdir -p tmp
-	cd tmp && LD_LIBRARY_PATH=../build/lib ../nginx/objs/nginx -c ../nginx.conf
 
 .PHONY: test
 test: image

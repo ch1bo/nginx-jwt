@@ -174,7 +174,6 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
   }
 
   off_t len = r->headers_out.content_length_n;
-  ngx_log_stderr(0, "header: content length %d -> %d", r->headers_in.content_length_n, len);
   if (len > 0 && len > (off_t)conf->issue_buffer_size) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                   "jwt_issue: cannot issue token from too large body, max is %O bytes",
@@ -191,8 +190,6 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
       return NGX_ERROR;
     }
     ngx_http_set_ctx(r, ctx, ngx_http_jwt_module);
-  } else {
-    ngx_log_stderr(0, "ctx already initialized!!");
   }
 
   // content_length_n == -1 means chunked encoding
@@ -207,8 +204,6 @@ static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r) {
 
 static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in) {
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_issue_body_filter");
-
-  ngx_log_stderr(0, "request status %d", r->headers_out.status);
 
   ngx_http_jwt_conf_t *conf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
   if (!conf->issue || in == NULL || r->headers_out.status != NGX_HTTP_OK) {
@@ -275,7 +270,6 @@ static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain
   // TODO(SN): use buffer directly to parse json (jansson: json_loadb)
   // instead of requiring null terminated string in jwt_add_grants_json
   *(ctx->last) = '\0';
-  ngx_log_stderr(0, "body buffer: (%d/%d) %s", ctx->last - ctx->body, ctx->length, ctx->body);
   err = jwt_add_grants_json(token, (char *)ctx->body);
   if (err) {
     jwt_free(token);
@@ -330,7 +324,8 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "jwt_verify_handler");
 
   if (conf->key.len == 0) {
-    ngx_log_stderr(0, "jwt_verify: missing 'jwt_key'");
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                  "jwt_verify: missing 'jwt_key'");
     return NGX_ERROR;
   }
 
