@@ -7,5 +7,5 @@ trap cleanup EXIT
 # Run test
 docker-compose build && docker-compose up -d && docker attach test_runner_1
 # Show nginx-jwt logs after stopping it (valgrind result)
-docker-compose stop nginx-jwt &
-docker-compose logs -f nginx-jwt
+# docker-compose stop nginx-jwt &
+# docker-compose logs -f nginx-jwt
