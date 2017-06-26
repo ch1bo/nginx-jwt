@@ -2,8 +2,20 @@ import assert from 'assert';
 import fetch from 'node-fetch';
 
 describe('nginx_jwt', () => {
+  describe('integration setup', function() {
 
-  describe('integration setup', () => {
+    const ping = (done) => {
+      fetch('http://nginx-jwt/')
+        .then(() => done())
+        .catch(() => {
+          console.log('timeout');
+          ping(done);
+        });
+    }
+
+    this.timeout(5000);
+    before(ping);
+
     it('works correctly', () => {
       return fetch('http://nginx-jwt/')
         .then((response) => {
