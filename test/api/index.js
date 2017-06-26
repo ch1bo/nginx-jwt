@@ -13,10 +13,20 @@ app.post('/login', (req, res) => {
   res.json(req.body);
 })
 app.get('/api', (req, res) => {
-  res.json({ message: 'api response' });
+  if (!req.headers.authorization) {
+    res.status(401)
+    res.send()
+  } else {
+    res.json({ message: 'api response' });
+  }
 });
 app.post('/api/echo', (req, res) => {
-  res.json(req.body);
+  if (!req.headers.authorization) {
+    res.status(401)
+    res.send()
+  } else {
+    res.json(req.body);
+  }
 });
 
 app.listen(80);

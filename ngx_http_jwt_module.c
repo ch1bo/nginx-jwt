@@ -330,7 +330,7 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   }
 
   if (!r->headers_in.authorization) {
-    return NGX_HTTP_UNAUTHORIZED;
+    return NGX_OK;
   }
   jwt_t* token;
   int err = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
@@ -338,13 +338,15 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on decode: %s", strerror(errno));
-    return NGX_HTTP_UNAUTHORIZED;
+    ngx_str_null(&r->headers_in.authorization->value);
+    return NGX_OK;
   }
   if (jwt_get_alg(token) == JWT_ALG_NONE) {
     jwt_free(token);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: alg=\"none\" rejected");
-    return NGX_HTTP_UNAUTHORIZED;
+    ngx_str_null(&r->headers_in.authorization->value);
+    return NGX_OK;
   }
   // TODO(SN): verify ttl
   // Extract grants and modify header
@@ -354,7 +356,8 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
   if (grants.data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on jwt_dump_str: %s", strerror(errno));
-    return NGX_HTTP_UNAUTHORIZED;
+    ngx_str_null(&r->headers_in.authorization->value);
+    return NGX_OK;
   }
   grants.len = strlen((char*)grants.data);
   ngx_str_t base64;
