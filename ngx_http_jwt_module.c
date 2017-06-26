@@ -26,6 +26,8 @@ static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf,
                                          void *parent,
                                          void *child);
+static char *ngx_http_jwt_keyfile(ngx_conf_t *cf, ngx_command_t *cmd,
+                                  void *conf);
 static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r);
 static ngx_int_t ngx_http_jwt_issue_body_filter(ngx_http_request_t *r, ngx_chain_t *in);
@@ -50,6 +52,12 @@ static ngx_command_t ngx_http_jwt_commands[] = {
   { ngx_string("jwt_key"),
     NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
     ngx_conf_set_str_slot,
+    NGX_HTTP_LOC_CONF_OFFSET,
+    offsetof(ngx_http_jwt_conf_t, key),
+    NULL },
+  { ngx_string("jwt_key_file"),
+    NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+    ngx_http_jwt_keyfile,
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof(ngx_http_jwt_conf_t, key),
     NULL },
@@ -144,6 +152,26 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
                             1 * 1024 * 1024);
   ngx_conf_merge_value(conf->verify, prev->verify, false);
 
+  return NGX_CONF_OK;
+}
+
+// jwt_key_file config directive callback
+static char *ngx_http_jwt_keyfile(ngx_conf_t *cf, ngx_command_t *cmd,
+                                  void *conf) {
+
+  ngx_str_t *args = cf->args->elts;
+  char *key_file = (char *)args[1].data;
+  FILE *fp = fopen(key_file, "r");
+  if (fp == NULL) {
+    ngx_log_stderr(0, "jwt_key_file: error on fopen - %s", key_file);
+    return NGX_CONF_ERROR;
+  }
+  ngx_str_t *key = conf; // TODO(SN): is this free'ed by nginx?
+  key->len = 4194304; // 4kb
+  key->data = malloc(key->len);
+  size_t n = fread(&key->data, 1, key->len, fp);
+  ngx_log_stderr(0, "jwt_key_file: (%d) %s", n, key->data);
+  fclose(fp);
   return NGX_CONF_OK;
 }
 
