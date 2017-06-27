@@ -26,7 +26,7 @@ static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf,
                                          void *parent,
                                          void *child);
-static char *ngx_http_jwt_keyfile(ngx_conf_t *cf, ngx_command_t *cmd,
+static char *ngx_http_jwt_key_file(ngx_conf_t *cf, ngx_command_t *cmd,
                                   void *conf);
 static ngx_int_t ngx_http_jwt_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_jwt_issue_header_filter(ngx_http_request_t *r);
@@ -57,7 +57,7 @@ static ngx_command_t ngx_http_jwt_commands[] = {
     NULL },
   { ngx_string("jwt_key_file"),
     NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-    ngx_http_jwt_keyfile,
+    ngx_http_jwt_key_file,
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof(ngx_http_jwt_conf_t, key),
     NULL },
@@ -156,21 +156,30 @@ static char * ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *ch
 }
 
 // jwt_key_file config directive callback
-static char *ngx_http_jwt_keyfile(ngx_conf_t *cf, ngx_command_t *cmd,
-                                  void *conf) {
-
+static char *ngx_http_jwt_key_file(ngx_conf_t *cf, ngx_command_t *cmd,
+                                   void *conf) {
+  ngx_str_t *key = conf;
   ngx_str_t *args = cf->args->elts;
   char *key_file = (char *)args[1].data;
-  FILE *fp = fopen(key_file, "r");
-  if (fp == NULL) {
-    ngx_log_stderr(0, "jwt_key_file: error on fopen - %s", key_file);
+  // Determine file size (avoiding fseek)
+  struct stat fstat;
+  if (stat(key_file, &fstat) < 0) {
+    ngx_conf_log_error(NGX_LOG_ERR, cf, errno, strerror(errno));
     return NGX_CONF_ERROR;
   }
-  ngx_str_t *key = conf; // TODO(SN): is this free'ed by nginx?
-  key->len = 4194304; // 4kb
-  key->data = malloc(key->len);
-  size_t n = fread(&key->data, 1, key->len, fp);
-  ngx_log_stderr(0, "jwt_key_file: (%d) %s", n, key->data);
+  FILE *fp = fopen(key_file, "rb");
+  if (fp == NULL) {
+    ngx_conf_log_error(NGX_LOG_ERR, cf, errno, strerror(errno));
+    return NGX_CONF_ERROR;
+  }
+  key->len = fstat.st_size;
+  key->data = calloc(key->len, 1);
+  if (fread(key->data, 1, key->len, fp) != key->len) {
+    ngx_conf_log_error(NGX_LOG_ERR, cf, 0,
+                       "jwt_key_file: unexpected end of file");
+    fclose(fp);
+    return NGX_CONF_ERROR;
+  }
   fclose(fp);
   return NGX_CONF_OK;
 }

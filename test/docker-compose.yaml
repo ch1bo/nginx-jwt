@@ -13,6 +13,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ../nginx/objs:/usr/src/nginx/nginx-1.13.0/objs
+      - ./keys:/var/nginx/keys
     links:
       - api
     command: "valgrind --leak-check=full nginx"

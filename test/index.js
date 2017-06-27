@@ -7,10 +7,7 @@ describe('nginx_jwt', () => {
     const ping = (done) => {
       fetch('http://nginx-jwt/')
         .then(() => done())
-        .catch(() => {
-          console.log('timeout');
-          ping(done);
-        });
+        .catch(() => ping(done));
     }
 
     this.timeout(5000);
