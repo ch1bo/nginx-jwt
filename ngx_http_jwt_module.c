@@ -362,50 +362,87 @@ ngx_int_t ngx_http_jwt_verify_handler(ngx_http_request_t *r) {
 
   if (conf->key.len == 0) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
-                  "jwt_verify: missing 'jwt_key'");
+                  "jwt_verify: missing 'jwt_key' or 'jwt_key_file'");
     return NGX_ERROR;
   }
 
-  if (!r->headers_in.authorization) {
-    return NGX_OK;
+  // Retrieve authorization token from header or cookie
+  ngx_str_t auth_header;
+  if (r->headers_in.authorization) {
+    // TODO(SN): require/support 'Bearer' header value?
+    auth_header = r->headers_in.authorization->value;
+    ngx_str_null(&r->headers_in.authorization->value);
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                  "jwt_verify: using authorization header");
+  } else {
+    ngx_str_t cookie_name = ngx_string("authorization");
+    if (ngx_http_parse_multi_header_lines(&r->headers_in.cookies, &cookie_name,
+                                          &auth_header) == NGX_DECLINED) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
+                    "jwt_verify: no 'authorization' header or cookie");
+      return NGX_OK;
+    }
+    // TODO(SN): ideally the 'authorization' cookie would be dropped here
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                  "jwt_verify: using authorization cookie");
   }
+  // Copy token to a null terminated string for libjwt
+  char *token_data = ngx_pcalloc(r->pool, auth_header.len + 1);
+  if (token_data == NULL) {
+    return NGX_ERROR;
+  }
+  ngx_memcpy(token_data, auth_header.data, auth_header.len);
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                "jwt_verify: authorization=%s", token_data);
   jwt_t* token;
-  int err = jwt_decode(&token, (const char *)r->headers_in.authorization->value.data,
-                       conf->key.data, conf->key.len);
+  int err = jwt_decode(&token, token_data, conf->key.data, conf->key.len);
   if (err) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on decode: %s", strerror(errno));
-    ngx_str_null(&r->headers_in.authorization->value);
     return NGX_OK;
   }
   if (jwt_get_alg(token) == JWT_ALG_NONE) {
     jwt_free(token);
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: alg=\"none\" rejected");
-    ngx_str_null(&r->headers_in.authorization->value);
     return NGX_OK;
   }
   // TODO(SN): verify ttl
-  // Extract grants and modify header
+  // Extract grants
   ngx_str_t grants;
   grants.data = (unsigned char*)jwt_get_grants_json(token, NULL);
   jwt_free(token);
   if (grants.data == NULL) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, errno,
                   "jwt_verify: error on jwt_dump_str: %s", strerror(errno));
-    ngx_str_null(&r->headers_in.authorization->value);
     return NGX_OK;
   }
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                "jwt_verify: grants %s", grants.data);
   grants.len = strlen((char*)grants.data);
   ngx_str_t base64;
   base64.len = ngx_base64_encoded_length(grants.len);
-  base64.data = ngx_palloc(r->pool, base64.len);
+  base64.data = malloc(base64.len);
   if (base64.data == NULL) {
     free(grants.data);
     return NGX_ERROR;
   }
   ngx_encode_base64(&base64, &grants);
   free(grants.data);
-  r->headers_in.authorization->value = base64;
+  // Create or update authorization header
+  if (r->headers_in.authorization == NULL) {
+    ngx_table_elt_t *h = ngx_list_push(&r->headers_in.headers);
+    if (h == NULL) {
+      return NGX_ERROR;
+    }
+    h->hash = 1;
+    ngx_str_set(&h->key, "Authorization");
+    h->value = base64;
+    r->headers_in.authorization = h;
+  } else {
+    r->headers_in.authorization->value = base64;
+  }
+  ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                "jwt_verify: out %V", &r->headers_in.authorization->value);
   return NGX_OK;
 }
