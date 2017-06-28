@@ -75,10 +75,13 @@ RUN ./configure \
     --with-stream_ssl_preread_module \
     --add-module=../nginx-jwt
 
+# Build nginx (will fail)
+RUN make || true
+
 # Add module source (here, for faster recompilation)
 COPY ngx_http_jwt_module.c /usr/src/nginx/nginx-jwt/
 
-# Build nginx
+# Build nginx (now really)
 RUN make && make install
 
 RUN useradd nginx
